@@ -94,8 +94,8 @@ graph TD
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/devops-stack.git
-   cd devops-stack
+   git clone https://github.com/cmndcntrlcyber/rtpi-maldev.git
+   cd rtpi-maldev
    ```
 
 2. Run the setup script:
