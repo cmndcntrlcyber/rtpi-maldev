@@ -6,7 +6,7 @@ A MalDev CI/CD Flavor of the Red Team Portable Infrastructure (RTPI-MalDev)
 
 A comprehensive, self-hosted DevOps environment with integrated source control, CI/CD, container management, and virtual workspaces.
 
-![](docs/architecture-diagram.mermaid)
+[](docs/architecture-diagram.mermaid)
 ## Features
 
 - **Gitea**: Self-hosted Git server
