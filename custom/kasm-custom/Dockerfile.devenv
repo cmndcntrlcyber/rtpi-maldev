@@ -1,0 +1,86 @@
+FROM kasmweb/core-ubuntu-focal:1.14.0
+USER root
+
+ENV HOME /home/kasm-default-profile
+ENV STARTUPDIR /dockerstartup
+ENV INST_SCRIPTS $STARTUPDIR/install
+WORKDIR $HOME
+
+# Install development tools
+RUN apt-get update && apt-get install -y \
+    apt-transport-https \
+    ca-certificates \
+    curl \
+    gnupg-agent \
+    software-properties-common \
+    git \
+    vim \
+    nano \
+    wget \
+    htop \
+    python3 \
+    python3-pip \
+    nodejs \
+    npm \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI
+RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add - \
+    && add-apt-repository \
+        "deb [arch=amd64] https://download.docker.com/linux/ubuntu \
+        $(lsb_release -cs) \
+        stable" \
+    && apt-get update \
+    && apt-get install -y docker-ce-cli \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install VS Code
+RUN curl -fsSL https://code-server.dev/install.sh | sh
+
+# Install Docker Compose
+RUN curl -L "https://github.com/docker/compose/releases/download/v2.18.1/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose \
+    && chmod +x /usr/local/bin/docker-compose
+
+# Install Git LFS
+RUN curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | bash \
+    && apt-get install -y git-lfs \
+    && git lfs install
+
+# Install additional dev tools
+RUN apt-get update && apt-get install -y \
+    jq \
+    graphviz \
+    make \
+    build-essential \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python development tools
+RUN pip3 install --no-cache-dir \
+    pylint \
+    black \
+    pytest \
+    pipenv \
+    virtualenv
+
+# Install Node.js development tools
+RUN npm install -g \
+    eslint \
+    prettier \
+    typescript
+
+# Add custom scripts
+RUN mkdir -p $INST_SCRIPTS/custom
+COPY startup.sh $INST_SCRIPTS/custom/
+RUN chmod +x $INST_SCRIPTS/custom/startup.sh \
+    && echo "source $INST_SCRIPTS/custom/startup.sh" >> $STARTUPDIR/custom_startup.sh
+
+# Create workspace directories
+RUN mkdir -p $HOME/workspace/repos \
+    && mkdir -p $HOME/workspace/projects \
+    && chown -R 1000:1000 $HOME/workspace
+
+# Switch back to default user
+USER 1000

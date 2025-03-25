@@ -1,0 +1,255 @@
+version: '3.8'
+
+networks:
+  devops_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${SUBNET:-172.18.0.0/16}
+
+volumes:
+  gitea_data:
+  gitea_config:
+  drone_data:
+  portainer_data:
+  kasm_db:
+  kasm_profiles:
+  kasm_www:
+  redis_data:
+  nginx_config:
+  nginx_html:
+  nginx_certs:
+
+services:
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    volumes:
+      - nginx_config:/etc/nginx/conf.d
+      - nginx_html:/usr/share/nginx/html
+      - nginx_certs:/etc/nginx/certs
+      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx/sites:/etc/nginx/templates:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-devops.local}
+    restart: unless-stopped
+    networks:
+      - devops_network
+    depends_on:
+      - gitea
+      - drone-server
+      - portainer
+      - kasm_manager
+
+  # Gitea - Git server
+  gitea:
+    image: gitea/gitea:latest
+    container_name: gitea
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA__database__DB_TYPE=sqlite3
+      - GITEA__server__ROOT_URL=http://${GITEA_DOMAIN:-gitea.devops.local}/
+      - GITEA__server__DOMAIN=${GITEA_DOMAIN:-gitea.devops.local}
+      - GITEA__security__SECRET_KEY=${GITEA_SECRET:-replace_with_random_string}
+      - GITEA__service__DISABLE_REGISTRATION=false
+      - GITEA__admin__DEFAULT_EMAIL=${GITEA_ADMIN_EMAIL:-admin@devops.local}
+      - GITEA__admin__PASSWD=${GITEA_ADMIN_PASSWORD:-replace_with_secure_password}
+      - GITEA__admin__USERNAME=${GITEA_ADMIN_USER:-gitadmin}
+    volumes:
+      - gitea_data:/data
+      - gitea_config:/etc/gitea
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - "${GITEA_SSH_PORT:-222}:22"
+    expose:
+      - "3000"
+    restart: unless-stopped
+    networks:
+      - devops_network
+
+  # Drone Server
+  drone-server:
+    image: drone/drone:latest
+    container_name: drone-server
+    environment:
+      - DRONE_GITEA_SERVER=http://gitea:3000
+      - DRONE_GITEA_CLIENT_ID=${DRONE_GITEA_CLIENT_ID}
+      - DRONE_GITEA_CLIENT_SECRET=${DRONE_GITEA_CLIENT_SECRET}
+      - DRONE_RPC_SECRET=${DRONE_RPC_SECRET:-replace_with_random_string}
+      - DRONE_SERVER_HOST=${DRONE_DOMAIN:-drone.devops.local}
+      - DRONE_SERVER_PROTO=${USE_SSL:-false}
+      - DRONE_USER_CREATE=username:${DRONE_ADMIN_USER:-gitadmin},admin:true
+    volumes:
+      - drone_data:/data
+    expose:
+      - "80"
+    depends_on:
+      - gitea
+    restart: unless-stopped
+    networks:
+      - devops_network
+
+  # Drone Runner
+  drone-runner:
+    image: drone/drone-runner-docker:latest
+    container_name: drone-runner
+    environment:
+      - DRONE_RPC_PROTO=http
+      - DRONE_RPC_HOST=drone-server
+      - DRONE_RPC_SECRET=${DRONE_RPC_SECRET:-replace_with_random_string}
+      - DRONE_RUNNER_CAPACITY=2
+      - DRONE_RUNNER_NAME=drone-runner
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - drone-server
+    restart: unless-stopped
+    networks:
+      - devops_network
+
+  # Portainer - Docker management UI
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+    expose:
+      - "9000"
+    restart: unless-stopped
+    networks:
+      - devops_network
+    command: --admin-password-file /run/secrets/portainer-pass
+    secrets:
+      - portainer-pass
+
+  # Kasm Workspaces - Database
+  kasm_db:
+    image: postgres:12
+    container_name: kasm_db
+    environment:
+      POSTGRES_PASSWORD: ${KASM_DB_PASSWORD:-kasm_db_password}
+      POSTGRES_USER: kasm
+      POSTGRES_DB: kasm
+    volumes:
+      - kasm_db:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - devops_network
+
+  # Kasm Workspaces - Redis
+  kasm_redis:
+    image: redis:6.0.5-alpine
+    container_name: kasm_redis
+    command: redis-server --requirepass ${KASM_REDIS_PASSWORD:-kasm_redis_password}
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - devops_network
+
+  # Kasm Workspaces - Manager
+  kasm_manager:
+    image: kasmweb/kasm:1.14.0
+    container_name: kasm_manager
+    environment:
+      KASM_ROLE: manager
+      POSTGRES_USER: kasm
+      POSTGRES_PASSWORD: ${KASM_DB_PASSWORD:-kasm_db_password}
+      POSTGRES_DB: kasm
+      POSTGRES_HOST: kasm_db
+      REDIS_HOST: kasm_redis
+      REDIS_PASSWORD: ${KASM_REDIS_PASSWORD:-kasm_redis_password}
+      PUBLIC_SERVER: true
+      API_SERVER_HOST: ${KASM_DOMAIN:-kasm.devops.local}
+      APP_ICON: https://kasmweb.com/docs/latest/img/logo.svg
+      SMTP_HOST: ""
+      DEFAULT_USER: ${KASM_ADMIN_USER:-admin@devops.local}
+      DEFAULT_PASSWORD: ${KASM_ADMIN_PASSWORD:-replace_with_secure_password}
+    volumes:
+      - kasm_profiles:/profiles
+      - kasm_www:/www
+    expose:
+      - "8443"
+    ports:
+      - "3022:22"
+    depends_on:
+      - kasm_db
+      - kasm_redis
+    restart: unless-stopped
+    networks:
+      - devops_network
+
+  # Kasm Workspaces - Agent
+  kasm_agent:
+    image: kasmweb/kasm:1.14.0
+    container_name: kasm_agent
+    environment:
+      KASM_ROLE: agent
+      MANAGER_HOST: kasm_manager
+      MANAGER_API_KEY: ${KASM_MANAGER_API_KEY:-the_value_from_kasm_manager_logs}
+      PUBLIC_SERVER: true
+      API_SERVER_HOST: ${KASM_DOMAIN:-kasm.devops.local}
+    privileged: true
+    volumes:
+      - /dev/input:/dev/input
+      - kasm_profiles:/profiles
+    depends_on:
+      - kasm_manager
+    restart: unless-stopped
+    networks:
+      - devops_network
+
+  # Kasm Postman Workspace
+  kasm_postman:
+    image: kasmweb/postman:latest
+    container_name: kasm_postman
+    environment:
+      VNC_PW: ${KASM_ADMIN_PASSWORD:-replace_with_secure_password}
+      KASM_SERVER: https://kasm_manager:8443
+      KASM_USER: ${KASM_ADMIN_USER:-admin@devops.local}
+      KASM_PASSWORD: ${KASM_ADMIN_PASSWORD:-replace_with_secure_password}
+    depends_on:
+      - kasm_manager
+    restart: unless-stopped
+    networks:
+      - devops_network
+
+  # DevOps Custom Environment (optional)
+  devops_env:
+    build:
+      context: ./custom/kasm-custom
+      dockerfile: Dockerfile.devenv
+    container_name: devops_env
+    environment:
+      VNC_PW: ${KASM_ADMIN_PASSWORD:-replace_with_secure_password}
+    depends_on:
+      - kasm_manager
+    restart: unless-stopped
+    networks:
+      - devops_network
+
+  # Webhook Handler (optional)
+  webhook_handler:
+    build:
+      context: ./custom/integrations
+      dockerfile: Dockerfile.webhook
+    container_name: webhook_handler
+    environment:
+      - PORT=8000
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET:-change_this_secret}
+    expose:
+      - "8000"
+    restart: unless-stopped
+    networks:
+      - devops_network
+
+secrets:
+  portainer-pass:
+    file: ./config/portainer/admin_password.txt
